@@ -23,5 +23,9 @@ jobs:
       working-directory: out
     - name: build
       run: cmake --build out
-    - name: test
+    - name: unittests
+      run: cmake --build out --target run-unittests
+    - name: c-api-tests
+      run: cmake --build out --target run-c-api-tests
+    - name: tests
       run: cmake --build out --target run-tests

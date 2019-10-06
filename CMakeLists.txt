@@ -122,7 +122,7 @@ else ()
   endif ()
 
   if (NOT WITH_EXCEPTIONS)
-    add_definitions(-fno-exceptions)
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fno-exceptions")
   endif ()
 
   # Need to define __STDC_*_MACROS because C99 specifies that C++ shouldn't
@@ -186,7 +186,7 @@ endif ()
 
 set(USE_SANITIZER FALSE)
 
-function(SANITIZER NAME FLAGS)
+function(sanitizer NAME FLAGS)
   if (${NAME})
     if (USE_SANITIZER)
       message(FATAL_ERROR "Only one sanitizer allowed")
@@ -196,22 +196,22 @@ function(SANITIZER NAME FLAGS)
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${FLAGS}" PARENT_SCOPE)
   endif ()
 endfunction()
-SANITIZER(USE_ASAN "-fsanitize=address")
-SANITIZER(USE_MSAN "-fsanitize=memory")
-SANITIZER(USE_LSAN "-fsanitize=leak")
+sanitizer(USE_ASAN "-fsanitize=address")
+sanitizer(USE_MSAN "-fsanitize=memory")
+sanitizer(USE_LSAN "-fsanitize=leak")
 
 if (USE_UBSAN)
   # -fno-sanitize-recover was deprecated, see if we are compiling with a newer
   # clang that requires -fno-sanitize-recover=all.
   set(UBSAN_BLACKLIST ${WABT_SOURCE_DIR}/ubsan.blacklist)
   include(CheckCXXCompilerFlag)
-  CHECK_CXX_COMPILER_FLAG("-fsanitize=undefined -fno-sanitize-recover -Wall -Werror" HAS_UBSAN_RECOVER_BARE)
+  check_cxx_compiler_flag("-fsanitize=undefined -fno-sanitize-recover -Wall -Werror" HAS_UBSAN_RECOVER_BARE)
   if (HAS_UBSAN_RECOVER_BARE)
-    SANITIZER(USE_UBSAN "-fsanitize=undefined -fno-sanitize-recover -fsanitize-blacklist=${UBSAN_BLACKLIST}")
+    sanitizer(USE_UBSAN "-fsanitize=undefined -fno-sanitize-recover -fsanitize-blacklist=${UBSAN_BLACKLIST}")
   endif ()
-  CHECK_CXX_COMPILER_FLAG("-fsanitize=undefined -fno-sanitize-recover=all -Wall -Werror" HAS_UBSAN_RECOVER_ALL)
+  check_cxx_compiler_flag("-fsanitize=undefined -fno-sanitize-recover=all -Wall -Werror" HAS_UBSAN_RECOVER_ALL)
   if (HAS_UBSAN_RECOVER_ALL)
-    SANITIZER(USE_UBSAN "-fsanitize=undefined -fno-sanitize-recover=all -fsanitize-blacklist=${UBSAN_BLACKLIST}")
+    sanitizer(USE_UBSAN "-fsanitize=undefined -fno-sanitize-recover=all -fsanitize-blacklist=${UBSAN_BLACKLIST}")
   endif ()
   if (NOT USE_SANITIZER)
     message(FATAL_ERROR "UBSAN is not supported")
@@ -222,7 +222,7 @@ set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} ${WABT_SOURCE_DIR}/cmake)
 
 add_custom_target(everything)
 
-add_library(wabt STATIC
+set(WABT_LIBRARY_SRC
   src/apply-names.h
   src/apply-names.cc
   src/binary.h
@@ -276,7 +276,6 @@ add_library(wabt STATIC
   src/opcode.cc
   src/opcode-code-table.h
   src/opcode-code-table.c
-  src/opcode.def
   src/option-parser.h
   src/option-parser.cc
   src/resolve-names.h
@@ -305,12 +304,27 @@ add_library(wabt STATIC
   # TODO(binji): Move this into its own library?
   src/interp/binary-reader-interp.h
   src/interp/binary-reader-interp.cc
+  src/interp/binary-reader-metadata.h
+  src/interp/binary-reader-metadata.cc
   src/interp/interp.h
   src/interp/interp.cc
   src/interp/interp-disassemble.cc
   src/interp/interp-trace.cc
 )
 
+add_library(wabt STATIC ${WABT_LIBRARY_SRC})
+
+# libwasm, which implenents the wasm C API
+add_library(wasm SHARED ${WABT_LIBRARY_SRC} src/interp/interp-wasm-c-api.cc)
+target_link_libraries(wasm wabt)
+target_include_directories(wasm PUBLIC third_party/wasm-c-api/include)
+if (COMPILER_IS_MSVC)
+  target_compile_definitions(wasm PRIVATE "WASM_API_EXTERN=__declspec(dllexport)")
+else ()
+  target_compile_options(wasm PRIVATE -Wno-old-style-cast)
+  target_compile_definitions(wasm PRIVATE "WASM_API_EXTERN=__attribute__((visibility(\"default\")))")
+endif ()
+set_target_properties(wasm PROPERTIES CXX_VISIBILITY_PRESET hidden)
 
 if (NOT EMSCRIPTEN)
   if (CODE_COVERAGE)
@@ -504,14 +518,64 @@ if (NOT EMSCRIPTEN)
     # See: https://github.com/actions/setup-python/issues/40
     find_package(PythonInterp REQUIRED)
     set(RUN_TESTS_PY ${WABT_SOURCE_DIR}/test/run-tests.py)
+
     add_custom_target(run-tests
-      COMMAND $<TARGET_FILE:wabt-unittests>
       COMMAND ${PYTHON_EXECUTABLE} ${RUN_TESTS_PY} --bindir $<TARGET_FILE_DIR:wat2wasm>
       DEPENDS ${WABT_EXECUTABLES}
       WORKING_DIRECTORY ${WABT_SOURCE_DIR}
       ${USES_TERMINAL}
     )
-    add_dependencies(run-tests wabt-unittests)
+
+    add_custom_target(run-unittests
+      COMMAND $<TARGET_FILE:wabt-unittests>
+      DEPENDS wabt-unittests
+      WORKING_DIRECTORY ${WABT_SOURCE_DIR}
+      ${USES_TERMINAL}
+    )
+
+    add_custom_target(run-c-api-tests
+      COMMAND ${PYTHON_EXECUTABLE} ${WABT_SOURCE_DIR}/test/run-c-api-examples.py --bindir $<TARGET_FILE_DIR:wat2wasm>
+      WORKING_DIRECTORY ${WABT_SOURCE_DIR}
+      ${USES_TERMINAL}
+    )
+
+    add_custom_target(check DEPENDS run-unittests run-tests run-c-api-tests)
+
+    function(c_api_example NAME)
+      set(EXENAME wasm-c-api-${NAME})
+      add_executable(${EXENAME} third_party/wasm-c-api/example/${NAME}.c)
+      if (NOT COMPILER_IS_MSVC)
+        set_target_properties(${EXENAME} PROPERTIES COMPILE_FLAGS "-std=gnu11 -Wno-pointer-to-int-cast")
+      endif ()
+      target_link_libraries(${EXENAME} wasm Threads::Threads)
+      add_custom_target(${EXENAME}-copy-to-bin ALL
+        COMMAND ${CMAKE_COMMAND} -E make_directory ${WABT_SOURCE_DIR}/bin
+        COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:${EXENAME}> ${WABT_SOURCE_DIR}/bin/
+        COMMAND ${CMAKE_COMMAND} -E copy ${WABT_SOURCE_DIR}/third_party/wasm-c-api/example/${NAME}.wasm $<TARGET_FILE_DIR:${EXENAME}>/
+        COMMAND ${CMAKE_COMMAND} -E copy ${WABT_SOURCE_DIR}/third_party/wasm-c-api/example/${NAME}.wasm ${WABT_SOURCE_DIR}/bin/
+        DEPENDS ${EXENAME}
+      )
+      add_dependencies(run-c-api-tests ${EXENAME})
+    endfunction()
+
+    c_api_example(callback)
+    c_api_example(finalize)
+    c_api_example(global)
+    c_api_example(hello)
+    c_api_example(hostref)
+    c_api_example(multi)
+    c_api_example(memory)
+    c_api_example(reflect)
+    c_api_example(serialize)
+    c_api_example(start)
+    c_api_example(table)
+    c_api_example(trap)
+    if (NOT WIN32)
+      # depends on pthreads
+      set(THREADS_PREFER_PTHREAD_FLAG ON)
+      find_package(Threads REQUIRED)
+      c_api_example(threads)
+    endif ()
   endif ()
 
   # install
