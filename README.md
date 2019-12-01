@@ -1,6 +1,22 @@
 [![Github CI Status](https://github.com/WebAssembly/wabt/workflows/CI/badge.svg)](https://github.com/WebAssembly/wabt)
 [![Build Status](https://travis-ci.org/WebAssembly/wabt.svg?branch=master)](https://travis-ci.org/WebAssembly/wabt) [![Windows status](https://ci.appveyor.com/api/projects/status/8vl5jwtk5ch6r84t/branch/master?svg=true)](https://ci.appveyor.com/project/WebAssembly/wabt/branch/master)
 
+# Notes from Terry
+
+ - Added code to count time used by the core interpreter.
+ - Added a fib(35) wasm as benchmark to measure performance simply.
+
+You'll need [CMake](https://cmake.org). You can then run CMake, the normal way:
+
+```console
+$ mkdir build
+$ cd build
+$ cmake .. -DCMAKE_BUILD_TYPE=Release
+$ cmake --build .
+$ ./wasm-interp ../benchmarks/fib_recursive_35.wasm --run-all-exports
+```
+
+
 # WABT: The WebAssembly Binary Toolkit
 
 WABT (we pronounce it "wabbit") is a suite of tools for WebAssembly, including:

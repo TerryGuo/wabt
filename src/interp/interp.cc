@@ -24,11 +24,17 @@
 #include <type_traits>
 #include <vector>
 
+#include<chrono>
+#include<iostream>
+
 #include "src/interp/interp-internal.h"
 
 #include "src/cast.h"
 #include "src/stream.h"
 #include "src/type-checker.h"
+
+using namespace std;
+using namespace chrono;
 
 namespace wabt {
 namespace interp {
@@ -3814,6 +3820,9 @@ ExecResult Executor::RunExportByName(Module* module,
 }
 
 Result Executor::RunDefinedFunction(IstreamOffset function_offset) {
+
+	auto start = system_clock::now();
+
   Result result = ResultType::Ok;
   thread_.set_pc(function_offset);
   if (trace_stream_) {
@@ -3831,6 +3840,14 @@ Result Executor::RunDefinedFunction(IstreamOffset function_offset) {
   if (result.type != ResultType::Returned) {
     return result;
   }
+
+  auto end = system_clock::now();
+
+  cout << "Elapsed time in milliseconds : "
+       << chrono::duration_cast<milliseconds>(end - start).count()
+       << " milliseconds" << endl;
+
+
   // Use OK instead of RETURNED for consistency.
   return ResultType::Ok;
 }
